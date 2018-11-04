@@ -14,6 +14,9 @@ from keras.utils import to_categorical
 from skimage.transform import rescale
 from keras.models import load_model
 from skimage.feature import hog
+from sklearn.utils import shuffle
+from collections import Counter
+from sklearn.metrics import confusion_matrix
 
 # =============================================================================
 # Global variable
@@ -34,7 +37,7 @@ hog_feat = True # HOG features on or off
 
 def import_inertial_data(action, subject, trial):
     filename = f'Inertial/a{action}_s{subject}_t{trial}_inertial.mat'
-    print (filename)
+
     if Path(filename).is_file():
         mat = sio.loadmat(filename)
         return mat['d_iner']
@@ -222,7 +225,7 @@ while action < 28:
                     
                     x_train_rescale = np.vstack((x_train_rescale, content_depth_rescale))
                     x_train_hog = np.vstack((x_train_hog, content_depth_hog))
-                    
+                                        
                     numberAction_train_inertial += len(content_inertial)
                     numberAction_train += 1
                     
@@ -253,8 +256,10 @@ x_test_skeleton = np.delete(x_test_skeleton,0,0)
 x_train_skeleton = np.delete(x_train_skeleton,0,0)
 x_test_rescale = np.delete(x_test_rescale,0,0)
 x_train_rescale = np.delete(x_train_rescale,0,0)
-x_test_hog = np.delete(x_test_rescale,0,0)
-x_train_hog = np.delete(x_train_rescale,0,0)
+x_test_hog = np.delete(x_test_hog,0,0)
+x_train_hog = np.delete(x_train_hog,0,0)
+
+print (len(x_train_hog))
 
 # =============================================================================
 # Print the testfile into a csv
@@ -273,6 +278,14 @@ print ("Finish Data Processing")
 # =============================================================================
 # Start of Machine Learning
 # =============================================================================
+
+x_train_skeleton, y_train_skeleton = shuffle(x_train_skeleton, y_train, random_state=256)
+x_train_rescale, y_train_rescale = shuffle(x_train_rescale, y_train, random_state=256)
+x_train_hog, y_train_hog = shuffle(x_train_hog, y_train, random_state=256)
+
+y_train_skeleton = to_categorical(y_train_skeleton)
+y_train_rescale = to_categorical(y_train_rescale)
+y_train_hog = to_categorical(y_train_hog)
 
 y_train = to_categorical(y_train)
 y_test = to_categorical(y_test)
@@ -305,7 +318,7 @@ model_skeleton.add(Dense(64, activation='relu'))
 model_skeleton.add(Dense(28, activation='softmax'))
    
 model_skeleton.compile(loss = 'categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
-history_skeleton = model_skeleton.fit(x_train_skeleton, y_train, epochs=256, batch_size=32, validation_split=0.1)
+history_skeleton = model_skeleton.fit(x_train_skeleton, y_train_skeleton, epochs=256, batch_size=32, validation_split=0.1)
     
 # =============================================================================
 # Model for Depth Rescale Dataset (Include Dropout for regularization)
@@ -320,7 +333,7 @@ model_rescale.add(Dropout(0.2))
 model_rescale.add(Dense(28, activation='softmax'))
 
 model_rescale.compile(loss = 'categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
-history_rescale = model_rescale.fit(x_train_rescale, y_train, epochs=128, batch_size=32, validation_split=0.1)
+history_rescale = model_rescale.fit(x_train_rescale, y_train_rescale, epochs=128, batch_size=32, validation_split=0.1)
 
 # =============================================================================
 # Model for Depth HOG
@@ -335,80 +348,124 @@ model.add(Dropout(0.2))
 model.add(Dense(28, activation='softmax'))
 
 model.compile(loss = 'categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
-history_hog = model.fit(x_train_hog, y_train, epochs=128, batch_size=32, validation_split=0.1)
+history_hog = model.fit(x_train_hog, y_train_hog, epochs=128, batch_size=32, validation_split=0.1)
 # =============================================================================
 # Test Inertial model
 # =============================================================================
+# PREDICTED RESULTS
+test_set = []
+index = 0 
+for item in monitorList:
+    loopCount = item['FrameAction']
+    count = 0
+    toAdd = list()
+    while count < loopCount:
+        toAppend = list(x_test_inertial[index])
+        toAdd.append(toAppend)
+        count = count + 1
+        index = index + 1
+    test_set.append(np.array(toAdd))
+
+y_results_set = []
+for test_item in test_set:
+    y_results = model_inertial.predict(test_item)
+    y_results = y_results.argmax(axis=1)
+    mode = Counter(y_results)
+    mode = mode.most_common(1)
+    mode = mode[0][0]
+    y_results_set.append(mode)
+    
+
+# ACTUAL RESULTS
+y_test_flat = y_test_inertial.argmax(axis=1)
+y_actual_set = []
+numTest = len(monitorList)
+index = -1
+for i in range(numTest):
+    index = index + monitorList[i]['FrameAction']
+    y_actual = y_test_flat[index]
+    y_actual_set.append(y_actual)
+
+y_results_set = np.array(y_results_set)
+y_actual_set = np.array(y_actual_set)
+
+c_matrix = confusion_matrix(y_actual_set, y_results_set)
+    
+correct_result = 0
+for i in range(27):
+    correct_result = correct_result + c_matrix[i][i]
+
+accuracy = correct_result / len(monitorList)
 
 
 # =============================================================================
 # Test Skeleton model
 # =============================================================================
-scores = model_skeleton.evaluate(x_test_skeleton, y_test)
-print (scores[1]*100)
-print ("\nAccuracy: %.2f%%" % (scores[1]*100))
+scores_skeleton = model_skeleton.evaluate(x_test_skeleton, y_test)
+print (scores_skeleton[1]*100)
+print ("\nAccuracy: %.2f%%" % (scores_skeleton[1]*100))
 
 plt.figure()
 plt.title('Skeleton Model - Validation Loss', fontsize=20)
 plt.xlabel('Epochs')
 plt.ylabel('Loss')
-plt.plot(history_skeleton.history_skeleton['loss'])
-plt.plot(history_skeleton.history_skeleton['val_loss'])
+plt.plot(history_skeleton.history['loss'])
+plt.plot(history_skeleton.history['val_loss'])
 plt.legend(['Training', 'Validation'])
 
 plt.figure()
 plt.title('Skeleton Model - Validation Accuracy', fontsize=20)
 plt.xlabel('Epochs')
 plt.ylabel('Accuracy')
-plt.plot(history_skeleton.history_skeleton['acc'])
-plt.plot(history_skeleton.history_skeleton['val_acc'])
+plt.plot(history_skeleton.history['acc'])
+plt.plot(history_skeleton.history['val_acc'])
 plt.legend(['Training', 'Validation'], loc='lower right')
 
 # =============================================================================
 # Test Depth Rescale model
 # =============================================================================
-scores = model_rescale.evaluate(x_test_rescale, y_test)
-print (scores[1]*100)
-print ("\nAccuracy: %.2f%%" % (scores[1]*100))
+scores_rescale = model_rescale.evaluate(x_test_rescale, y_test)
+print (scores_rescale[1]*100)
+print ("\nAccuracy: %.2f%%" % (scores_rescale[1]*100))
 
 plt.figure()
 plt.title('Depth Model - Validation Loss', fontsize=20)
 plt.xlabel('Epochs')
 plt.ylabel('Loss')
-plt.plot(history_rescale.history_rescale['loss'])
-plt.plot(history_rescale.history_rescale['val_loss'])
+plt.plot(history_rescale.history['loss'])
+plt.plot(history_rescale.history['val_loss'])
 plt.legend(['Training', 'Validation'])
 
 plt.figure()
 plt.title('Depth Model - Validation Accuracy', fontsize=20)
 plt.xlabel('Epochs')
 plt.ylabel('Accuracy')
-plt.plot(history_rescale.history_rescale['acc'])
-plt.plot(history_rescale.history_rescale['val_acc'])
+plt.plot(history_rescale.history['acc'])
+plt.plot(history_rescale.history['val_acc'])
 plt.legend(['Training', 'Validation'], loc='lower right')
 
-
+model_rescale.summary()
 # =============================================================================
 # Test Depth HOG model
 # =============================================================================
-scores = model.evaluate(x_test_hog, y_test)
-print (scores[1]*100)
-print ("\nAccuracy: %.2f%%" % (scores[1]*100))
+scores_hog = model.evaluate(x_test_hog, y_test)
+print (scores_hog[1]*100)
+print ("\nAccuracy: %.2f%%" % (scores_hog[1]*100))
 
 plt.figure()
-plt.title('Skeleton Model - Validation Loss', fontsize=20)
+plt.title('HOG Model - Validation Loss', fontsize=20)
 plt.xlabel('Epochs')
 plt.ylabel('Loss')
-plt.plot(history_hog.history_hog['loss'])
-plt.plot(history_hog.history_hog['val_loss'])
+plt.plot(history_hog.history['loss'])
+plt.plot(history_hog.history['val_loss'])
 plt.legend(['Training', 'Validation'])
 
 plt.figure()
-plt.title('Skeleton Model - Validation Accuracy', fontsize=20)
+plt.title('HOG Model - Validation Accuracy', fontsize=20)
 plt.xlabel('Epochs')
 plt.ylabel('Accuracy')
-plt.plot(history_hog.history_hog['acc'])
-plt.plot(history_hog.history_hog['val_acc'])
+plt.plot(history_hog.history['acc'])
+plt.plot(history_hog.history['val_acc'])
 plt.legend(['Training', 'Validation'], loc='lower right')
 
 model.summary()
@@ -422,5 +479,76 @@ model_skeleton.save('Model/depth_skeleton_model.h5')
 model_rescale.save('Model/depth_rescale_model.h5')
 model.save('Model/depth_hog_model.h5')
 
+# =============================================================================
+# Start of Ensemble
+# =============================================================================
+result_iner = np.array(y_results_set)
 
-#model = load_model('Model/depth_rescale_model.h5')
+skel_result = model_skeleton.predict(x_test_skeleton)
+result_skel = skel_result.argmax(axis=1)
+
+rescale_result = model_rescale.predict(x_test_rescale)
+result_rescale = rescale_result.argmax(axis=1)
+
+hog_result = model.predict(x_test_hog)
+result_hog = hog_result.argmax(axis=1)
+
+resultAllModel = np.vstack((result_iner, result_skel, result_rescale, result_hog)).T
+
+accuracy_models = []
+accuracy_models.append(accuracy)
+accuracy_models.append(scores_skeleton[1])
+accuracy_models.append(scores_rescale[1])
+accuracy_models.append(scores_hog[1])
+
+best_index = accuracy_models.index(max(accuracy_models))
+
+
+final_result = []
+for item in resultAllModel:
+    final_predict_set = Counter(item)
+    final_predict = final_predict_set.most_common()
+    if(len(final_predict) == 1):
+        final_predict = final_predict[0][0]
+    elif(final_predict[0][1] > final_predict[1][1]):
+        final_predict = final_predict[0][0]
+    else:
+        final_predict = item[best_index]
+    final_result.append(final_predict)
+    
+test1 = np.array(final_result)
+test2 = y_test.argmax(axis=1)
+test = np.vstack((resultAllModel.T, test1, test2)).T
+
+all_results_matrix = confusion_matrix(y_actual_set, np.array(final_result))
+correct_result = 0
+for i in range(27):
+    correct_result = correct_result + all_results_matrix[i][i]
+
+accuracy_ensemble = correct_result / len(monitorList)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
