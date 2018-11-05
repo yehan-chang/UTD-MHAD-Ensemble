@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 import csv
 import numpy as np
 import scipy.io as sio
@@ -12,11 +11,13 @@ from keras.models import Sequential
 from keras.layers import Dense, Dropout
 from keras.utils import to_categorical
 from skimage.transform import rescale
-from keras.models import load_model
+from sklearn.decomposition import PCA
 from skimage.feature import hog
 from sklearn.utils import shuffle
 from collections import Counter
 from sklearn.metrics import confusion_matrix
+from sklearn.metrics import classification_report
+from pandas_ml import ConfusionMatrix
 
 # =============================================================================
 # Global variable
@@ -259,29 +260,20 @@ x_train_rescale = np.delete(x_train_rescale,0,0)
 x_test_hog = np.delete(x_test_hog,0,0)
 x_train_hog = np.delete(x_train_hog,0,0)
 
-print (len(x_train_hog))
-
-# =============================================================================
-# Print the testfile into a csv
-# =============================================================================
-
-keys = monitorList[0].keys()
-
-with open('test_data.csv', 'w') as output_file:
-    dict_writer = csv.DictWriter(output_file, keys)
-    dict_writer.writeheader()
-    dict_writer.writerows(monitorList) 
-    
-    
 print ("Finish Data Processing")
 
 # =============================================================================
 # Start of Machine Learning
 # =============================================================================
-
 x_train_skeleton, y_train_skeleton = shuffle(x_train_skeleton, y_train, random_state=256)
 x_train_rescale, y_train_rescale = shuffle(x_train_rescale, y_train, random_state=256)
 x_train_hog, y_train_hog = shuffle(x_train_hog, y_train, random_state=256)
+
+pca_model_rescale = PCA(n_components=0.98, svd_solver='full')
+pca_model_hog = PCA(n_components=0.98, svd_solver='full')
+
+x_train_rescale = pca_model_rescale.fit_transform(x_train_rescale)
+x_train_hog = pca_model_hog.fit_transform(x_train_hog)
 
 y_train_skeleton = to_categorical(y_train_skeleton)
 y_train_rescale = to_categorical(y_train_rescale)
@@ -291,10 +283,6 @@ y_train = to_categorical(y_train)
 y_test = to_categorical(y_test)
 y_train_inertial = to_categorical(y_train_inertial)
 y_test_inertial = to_categorical(y_test_inertial)
-
-
-itemList = []
-item = {}
 
 # =============================================================================
 # Model for Inertial Dataset
@@ -313,8 +301,8 @@ history_inertial = model_inertial.fit(x_train_inertial, y_train_inertial, epochs
 # =============================================================================
 model_skeleton = Sequential()
 
-model_skeleton.add(Dense(168, activation='relu'))
-model_skeleton.add(Dense(64, activation='relu'))
+model_skeleton.add(Dense(192, activation='relu'))
+model_skeleton.add(Dense(176, activation='relu'))
 model_skeleton.add(Dense(28, activation='softmax'))
    
 model_skeleton.compile(loss = 'categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
@@ -390,13 +378,14 @@ y_results_set = np.array(y_results_set)
 y_actual_set = np.array(y_actual_set)
 
 c_matrix = confusion_matrix(y_actual_set, y_results_set)
+c_matrix_inertial = c_matrix.astype('float') / c_matrix.sum(axis=1)[:, np.newaxis]
+acc_inertial = c_matrix_inertial.diagonal()
     
 correct_result = 0
 for i in range(27):
     correct_result = correct_result + c_matrix[i][i]
 
 accuracy = correct_result / len(monitorList)
-
 
 # =============================================================================
 # Test Skeleton model
@@ -421,9 +410,16 @@ plt.plot(history_skeleton.history['acc'])
 plt.plot(history_skeleton.history['val_acc'])
 plt.legend(['Training', 'Validation'], loc='lower right')
 
+y_pred_skel = model_skeleton.predict(x_test_skeleton).argmax(axis=1)
+skel_matrix = confusion_matrix(y_test.argmax(axis=1), y_pred_skel)
+#Now the normalize the diagonal entries
+skel_matrix = skel_matrix.astype('float') / skel_matrix.sum(axis=1)[:, np.newaxis]
+acc_skel = skel_matrix.diagonal()
+
 # =============================================================================
 # Test Depth Rescale model
 # =============================================================================
+x_test_rescale = pca_model_rescale.transform(x_test_rescale) 
 scores_rescale = model_rescale.evaluate(x_test_rescale, y_test)
 print (scores_rescale[1]*100)
 print ("\nAccuracy: %.2f%%" % (scores_rescale[1]*100))
@@ -444,10 +440,16 @@ plt.plot(history_rescale.history['acc'])
 plt.plot(history_rescale.history['val_acc'])
 plt.legend(['Training', 'Validation'], loc='lower right')
 
-model_rescale.summary()
+y_pred_rescale = model_rescale.predict(x_test_rescale).argmax(axis=1)
+rescale_matrix = confusion_matrix(y_test.argmax(axis=1), y_pred_rescale)
+#Now the normalize the diagonal entries
+rescale_matrix = rescale_matrix.astype('float') / rescale_matrix.sum(axis=1)[:, np.newaxis]
+acc_rescale = rescale_matrix.diagonal()
+
 # =============================================================================
 # Test Depth HOG model
 # =============================================================================
+x_test_hog = pca_model_hog.transform(x_test_hog) 
 scores_hog = model.evaluate(x_test_hog, y_test)
 print (scores_hog[1]*100)
 print ("\nAccuracy: %.2f%%" % (scores_hog[1]*100))
@@ -468,16 +470,19 @@ plt.plot(history_hog.history['acc'])
 plt.plot(history_hog.history['val_acc'])
 plt.legend(['Training', 'Validation'], loc='lower right')
 
-model.summary()
+y_pred_hog = model.predict(x_test_hog).argmax(axis=1)
+hog_matrix = confusion_matrix(y_test.argmax(axis=1), y_pred_hog)
+#Now the normalize the diagonal entries
+hog_matrix = hog_matrix.astype('float') / hog_matrix.sum(axis=1)[:, np.newaxis]
+acc_hog = hog_matrix.diagonal()
 
 # =============================================================================
 # Save the model
 # =============================================================================
-
-model_inertial.save('Model/depth_inertial_model.h5')
-model_skeleton.save('Model/depth_skeleton_model.h5')
-model_rescale.save('Model/depth_rescale_model.h5')
-model.save('Model/depth_hog_model.h5')
+#model_inertial.save('Model/depth_inertial_model.h5')
+#model_skeleton.save('Model/depth_skeleton_model.h5')
+#model_rescale.save('Model/depth_rescale_model.h5')
+#model.save('Model/depth_hog_model.h5')
 
 # =============================================================================
 # Start of Ensemble
@@ -501,8 +506,8 @@ accuracy_models.append(scores_skeleton[1])
 accuracy_models.append(scores_rescale[1])
 accuracy_models.append(scores_hog[1])
 
+#Get the best model accuracy
 best_index = accuracy_models.index(max(accuracy_models))
-
 
 final_result = []
 for item in resultAllModel:
@@ -516,10 +521,6 @@ for item in resultAllModel:
         final_predict = item[best_index]
     final_result.append(final_predict)
     
-test1 = np.array(final_result)
-test2 = y_test.argmax(axis=1)
-test = np.vstack((resultAllModel.T, test1, test2)).T
-
 all_results_matrix = confusion_matrix(y_actual_set, np.array(final_result))
 correct_result = 0
 for i in range(27):
@@ -527,28 +528,29 @@ for i in range(27):
 
 accuracy_ensemble = correct_result / len(monitorList)
 
+target_names = ['Swipt Left', 'Swipe Right', 'Wave', 'Clap', 'Throw', 'Arm Cross', 'Basketball shoot', 'Draw X', 'Draw Circle CW', 'Draw Circle CCW', 'Draw Triangle', 'Bowling', 'Boxing', 'Baseball Swing', 'Tennis Swing', 'Arm Curl', 'Tennis Serve', 'Push', 'Knock', 'Catch', 'Pickup Throw', 'Jog', 'Walk', 'Sit to Stand', 'Stand to Sit', 'lunge', 'Squad']
+print(classification_report(y_actual_set, np.array(final_result), target_names=target_names))
+
+cm = ConfusionMatrix(y_actual_set, np.array(final_result))
+cm.plot()
+stats = cm.stats()
+    
+cmstats = dict(stats) 
+cmstats2 = cmstats['class']  
+cmstats2.to_csv('ensemble.csv', sep=',')
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
