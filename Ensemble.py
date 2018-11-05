@@ -539,18 +539,3 @@ cmstats = dict(stats)
 cmstats2 = cmstats['class']  
 cmstats2.to_csv('ensemble.csv', sep=',')
 
-
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
